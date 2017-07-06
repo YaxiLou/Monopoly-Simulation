@@ -1,0 +1,241 @@
+---
+title: "Stats 102A (Computational Statistics) - Homework 5"
+author: "Yaxi Lou"
+date: "July 21, 2016"
+output: html_document
+---
+
+##Data frames for the game board, and the two decks of cards###
+```{r}
+gameboard <- data.frame(space = 1:40, title = c("Go" , "Mediterranean Avenue" , "Community Chest" , "Baltic Avenue" , "Income Tax" , "Reading Railroad" , "Oriental Avenue" , "Chance" , "Vermont Avenue" , "Connecticut Avenue" , "Jail" , "St. Charles Place" , "Electric Company" , "States Avenue" , "Virginia Avenue" , "Pennsylvania Railroad" , "St. James Place" , "Community Chest" , "Tennessee Avenue" , "New York Avenue" , "Free Parking" , "Kentucky Avenue" , "Chance" , "Indiana Avenue" , "Illinois Avenue" , "B & O Railroad" , "Atlantic Avenue" , "Ventnor Avenue" , "Water Works" , "Marvin Gardens" , "Go to jail" , "Pacific Avenue" , "North Carolina Avenue" , "Community Chest" , "Pennsylvania Avenue" , "Short Line Railroad" , "Chance" , "Park Place" , "Luxury Tax" , "Boardwalk"))
+
+chancedeck <- data.frame(index = 1:15, card = c("Advance to Go" , "Advance to Illinois Ave." , "Advance to St. Charles Place" , "Advance token to nearest Utility" , "Advance token to the nearest Railroad" , "Take a ride on the Reading Railroad" , "Take a walk on the Boardwalk" , "Go to Jail" , "Go Back 3 Spaces" , "Bank pays you dividend of $50" , "Get out of Jail Free" , "Make general repairs on all your property" , "Pay poor tax of $15" , "You have been elected Chairman of the Board" , "Your building loan matures"))
+
+communitydeck <- data.frame(index = 1:16, card = c("Advance to Go" , "Go to Jail" , "Bank error in your favor ??? Collect $200" , "Doctor's fees Pay $50" , "From sale of stock you get $45" , "Get Out of Jail Free" , "Grand Opera Night Opening" , "Xmas Fund matures" , "Income tax refund" , "Life insurance matures ??? Collect $100" , "Pay hospital fees of $100" , "Pay school tax of $150" , "Receive for services $25" , "You are assessed for street repairs" , "You have won second prize in a beauty contest" , "You inherit $100"))
+
+dice <- function(){
+    faces <- sample(1:6, 2, replace=TRUE)
+    if(faces[1] == faces[2]) doubles = TRUE
+    else doubles = FALSE
+    movement = sum(faces)
+    return(list(faces=faces, doubles=doubles, movement=movement))
+}
+
+```
+
+##Main Code
+```{r}
+# Store special positions first
+community <- c(3, 18, 34)
+chance <- c(8, 23, 37)
+utilities <- c(13, 29)
+railroads <- c(6, 16, 26, 36)
+
+# Set basic status for a player
+Player <- setRefClass("Player",
+                      fields=list(
+                        position="numeric", # current position of player
+                        jail="logical",  # player is in jail
+                        doubles="numeric",  # number of times the player has rolled double this turn
+                        free="numeric"  # turn that the player can get out of jail
+                        ))
+
+# Draw a chance card
+draw_chance <- function(player) {
+  card <- sample(nrow(chancedeck), 1)
+  update <- vector(mode="numeric")  # contains indexes that we need to update in table
+  # Advance to Go
+  if (card == 1) {
+    player$position <- 1
+    update <- c(update, 1)
+  }
+  # Advance to Illinois Ave
+  if (card == 2) {
+    player$position <- 25
+    update <- c(update, 25)
+  }
+  # Advance to St Charles Place
+  if (card == 3) {
+    player$position <- 12
+    update <- c(update, 12)
+  }
+  # Advance to nearest Utility
+  if (card == 4) {
+    if (player$position > 29) {
+      player$position <- utilities[1]
+      update <- c(update, utilities[1])
+    } else {
+      nearest <- min(which(utilities > player$position))
+      player$position <- utilities[nearest]
+      update <- c(update, utilities[nearest])
+    } 
+  }
+  # Advance to nearest Railroad
+  if (card == 5) {
+    if (player$position > 36) {
+      player$position <- railroads[1]
+      update <- c(update, railroads[1])
+    } else {
+      nearest <- min(which(railroads > player$position)) 
+      player$position <- railroads[nearest]
+      update <- c(update, railroads[nearest])
+    } 
+  }
+  # Take a ride on Reading Railroad
+  if (card == 6) {
+    player$position <- 6
+    update <- c(update, 6)
+  }
+  # Take a walk on Boardwalk
+  if (card == 7) {
+    player$position <- 40
+    update <- c(update, 40)
+  }
+  # Go to Jail
+  if (card == 8) {
+    player$position <- 11
+    player$jail <- TRUE
+    update <- c(update, 11)
+  }
+  # Go back 3 spaces
+  if (card == 9) {
+    player$position <- player$position - 3
+    # Reset player position relative to end of board
+    if (player$position < 1) {
+      player$position <- player$position + 40
+    }
+    update <- c(update, player$position)
+  }
+  #For other cards, remain the same position
+  return(update)
+}
+
+# Draw a community card
+draw_community <- function(player) {
+  card <- sample(nrow(communitydeck), 1)
+  update <- vector(mode="numeric")  # contains indexes that we need to update in table
+  # Advance to Go
+  if (card == 1) {
+    player$position <- 1
+    update <- c(update, 1)
+  }
+  # Go to jail
+  if (card == 2) {
+    player$position <- 11
+    player$jail <- TRUE
+    update <- c(update, 11)
+  }
+  #For other cards, remain the same position
+  return(update)
+}
+
+# Check if the space we landed on does anything special
+check_space <- function(player, table, turn) {
+  new_table <- table
+  before <- player$jail
+  # Go to Jail
+  if (player$position == 31) {
+    player$jail <- TRUE
+    player$position <- 11
+    player$free <- turn + 3
+    new_table$count[player$position] <- new_table$count[player$position] + 1
+  }
+  # Landed on community chest
+  if (player$position %in% community) {
+    to_update <- draw_community(player)
+    # Update the counts within table if we drew a card that moved the player
+    for (i in to_update) {
+      new_table$count[i] <- new_table$count[i] + 1  
+    }
+    # If the player wasn't in jail before and is now in jail
+    if (before == FALSE && player$jail == TRUE) {
+      player$free <- turn + 3
+    }
+  }
+  # Landed on Chance
+  if (player$position %in% chance) {
+    to_update <- draw_chance(player)
+    # Update the counts within table if we drew a card that moved the player
+    for (i in to_update) {
+      new_table$count[i] <- new_table$count[i] + 1
+    }
+    # If the player wasn't in jail before and is now in jail
+    if (before == FALSE && player$jail == TRUE) {
+      player$free <- turn + 3
+    }
+  }
+  return(new_table)
+}
+
+# Runs the simulation
+# Assumes 1 turn = player rolling dice
+monopoly <- function(n, turns) {
+  # Initialize the table that keeps track of where players land
+  table <- data.frame(space=gameboard$space, title=gameboard$title, count=rep(0,40))
+  for (i in 1:n) {
+    # New player for every simulation
+    player <- Player$new(position=1, jail=FALSE, doubles=0, free=0)
+
+    for (turn in 1:turns) {
+        repeat {
+          reroll <- FALSE  # Determine if we need to re-roll
+          # Free the player from jail
+          current_roll <- dice()  # Roll the dice
+          # Got a doubles
+          if (current_roll$doubles == TRUE) {
+            # Rolled a double to get out of jail
+            if (player$jail == TRUE) {
+              reroll <- FALSE  # Don't reroll again
+              player$jail <- FALSE
+            } else {
+              # Player already had two doubles and got doubles the 3rd times in a row
+              if (player$doubles == 2) {
+                reroll <- FALSE
+                player$jail <- TRUE
+                player$free <- turn + 3
+                player$position <- 11
+                table$count[11] <- table$count[11] + 1
+                break;
+              } else {
+                reroll <- TRUE   #Player rolls double the second time
+                player$doubles <- player$doubles + 1    
+              }
+            }
+          }
+          # 3rd turn in jail
+          if (player$jail == TRUE && player$free == turn) {
+            player$jail <- FALSE
+          }
+          # Update the player's current position only if player is not in jail
+          if (player$jail == FALSE) {
+            player$position <- player$position + current_roll$movement  
+          }
+          # If the player's position goes over 40, reset relative to beginning of board
+          if (player$position > 40) {
+            player$position <- player$position %% 40
+          }
+          # Update the counts in the table
+          table$count[player$position] <- table$count[player$position] + 1
+          # Update the counts again if we moved the player during the check space
+          if (player$jail == FALSE) {
+            table <- check_space(player, table, turn)  
+          }
+          # Turn has ended
+          if (reroll == FALSE) {
+            player$doubles <- 0
+            break
+          }
+        }
+      }
+  }
+  # Zero out the "Go to Jail" space because it doesn't count as "landed upon" per instructions
+  table$count[31] <- 0
+  return(table)
+}
+
+output<-monopoly(2000,100)
+newdata<-as.data.frame(output)
+library(dplyr)
+newdata %>% arrange(desc(count)) %>% mutate(ratio=count/sum(count))
+```
+
